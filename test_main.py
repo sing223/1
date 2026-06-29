@@ -52,6 +52,20 @@ class MainHelpersTest(unittest.TestCase):
         html = '<form method="POST" action="https://fc2ppvdb.com/login"></form>'
         self.assertIsNone(main.parse_first_actress(html))
 
+    def test_move_one_file_creates_named_target_directory(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "FC2-1234567.mp4"
+            source.write_bytes(b"video")
+            target_dir = root / "小春"
+
+            moved_to = main.move_one_file(source, target_dir, overwrite_existing=False)
+
+            self.assertEqual(moved_to, target_dir / source.name)
+            self.assertTrue(target_dir.is_dir())
+            self.assertTrue(moved_to.is_file())
+            self.assertFalse(source.exists())
+
     @patch("main.create_session")
     @patch("main.fetch_actress_name")
     @patch("main.move_one_file")

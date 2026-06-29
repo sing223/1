@@ -107,7 +107,7 @@ def load_config() -> Config:
 
     lookup_mode = str(raw.get("lookup_mode", "")).strip().lower()
     if not lookup_mode:
-        lookup_mode = "requests" if bool(raw.get("web_lookup_enabled", False)) else "manual"
+        lookup_mode = "hybrid"
     if lookup_mode not in {"csv_only", "manual", "browser", "requests", "hybrid"}:
         raise ValueError("lookup_mode 只能是 csv_only、manual、browser、requests 或 hybrid")
 
