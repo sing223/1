@@ -1,0 +1,10 @@
+config.json
+cache.json
+failed.json
+organized_dirs.json
+actress_map.csv
+logs/
+browser_profile/
+__pycache__/
+tmp*/
+*.pyc
