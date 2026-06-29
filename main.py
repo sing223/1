@@ -39,6 +39,8 @@ FAILED_PATH = SCRIPT_DIR / "failed.json"
 ORGANIZED_DIRS_PATH = SCRIPT_DIR / "organized_dirs.json"
 LOG_DIR = SCRIPT_DIR / "logs"
 LOG_PATH = LOG_DIR / "run.log"
+TARGET_DOMAIN = "fc2cmadb.com"
+TARGET_BASE_URL = f"https://{TARGET_DOMAIN}"
 
 DEFAULT_VIDEO_EXTENSIONS = [".mp4", ".mkv", ".avi", ".wmv", ".mov", ".flv", ".ts"]
 FC2_PATTERN = re.compile(r"(?i)\bfc2(?:\s*[-_ ]?\s*ppv)?\s*[-_ ]?\s*(\d{4,10})\b")
@@ -278,7 +280,7 @@ def apply_cookie(session: requests.Session, cookie_text: str) -> None:
     cookie = SimpleCookie()
     cookie.load(cookie_text)
     for key, morsel in cookie.items():
-        session.cookies.set(key, morsel.value, domain="fc2ppvdb.com")
+        session.cookies.set(key, morsel.value, domain=TARGET_DOMAIN)
 
 
 def create_session(config: Config) -> requests.Session:
@@ -317,12 +319,12 @@ def first_match(html: str, patterns: Iterable[str]) -> Optional[str]:
 
 
 def parse_first_actress(html: str) -> Optional[str]:
-    if re.search(r'<form[^>]+action=["\']https://fc2ppvdb\.com/login["\']', html, re.IGNORECASE):
+    if re.search(r'<form[^>]+action=["\']https://fc2cmadb\.com/login["\']', html, re.IGNORECASE):
         return None
 
     patterns = [
-        r'<a[^>]+href=["\'](?:https://fc2ppvdb\.com)?/actresses/\d+["\'][^>]*>(.*?)</a>',
-        r"(?:女优|女優|出演者|出演|Actor|Actress)\s*[：:]?(?:\s*</?[^>]+>)*\s*<a[^>]+href=[\"'](?:https://fc2ppvdb\.com)?/actresses/\d+[\"'][^>]*>(.*?)</a>",
+        r'<a[^>]+href=["\'](?:https://fc2cmadb\.com)?/actresses/\d+["\'][^>]*>(.*?)</a>',
+        r"(?:女优|女優|出演者|出演|Actor|Actress)\s*[：:]?(?:\s*</?[^>]+>)*\s*<a[^>]+href=[\"'](?:https://fc2cmadb\.com)?/actresses/\d+[\"'][^>]*>(.*?)</a>",
         r"(?:女优|女優|出演者|出演|Actor|Actress)\s*[：:]\s*([^<\r\n]+)",
     ]
     actress = first_match(html, patterns)
@@ -344,7 +346,7 @@ def is_access_blocked(html: str) -> bool:
         "cloudflare",
         "Just a moment",
         "Checking your browser",
-        "https://fc2ppvdb.com/login",
+        f"{TARGET_BASE_URL}/login",
     ]
     lowered = html.lower()
     return any(marker.lower() in lowered for marker in markers)
@@ -354,7 +356,7 @@ def fetch_actress_name(session: requests.Session, number: str, timeout: int) -> 
     if requests is None:
         return FetchResult(None, "缺少依赖 requests，请先运行：pip install -r requirements.txt", blocked=True)
 
-    url = f"https://fc2ppvdb.com/articles/{number}"
+    url = f"{TARGET_BASE_URL}/articles/{number}"
     try:
         response = session.get(url, timeout=timeout)
         response.raise_for_status()
@@ -362,7 +364,7 @@ def fetch_actress_name(session: requests.Session, number: str, timeout: int) -> 
         return FetchResult(None, f"网页请求失败：{exc}", blocked=True)
 
     if is_access_blocked(response.text):
-        return FetchResult(None, "访问受限或 Cookie 已失效，请刷新 fc2ppvdb Cookie 后重试", blocked=True)
+        return FetchResult(None, f"访问受限或 Cookie 已失效，请刷新 {TARGET_DOMAIN} Cookie 后重试", blocked=True)
 
     actress = parse_first_actress(response.text)
     if actress:
@@ -371,7 +373,7 @@ def fetch_actress_name(session: requests.Session, number: str, timeout: int) -> 
 
 
 def manual_lookup(number: str) -> FetchResult:
-    url = f"https://fc2ppvdb.com/articles/{number}"
+    url = f"{TARGET_BASE_URL}/articles/{number}"
     print(f"\n需要手动确认 FC2-{number} 的女优名。")
     print(f"已打开网页：{url}")
     print("在浏览器里查看女优名后，在这里输入；直接回车跳过，输入 q 结束本轮。")
@@ -420,7 +422,7 @@ class BrowserLookup:
         if self._page is None:
             return FetchResult(None, "浏览器查询器尚未启动", blocked=True)
 
-        url = f"https://fc2ppvdb.com/articles/{number}"
+        url = f"{TARGET_BASE_URL}/articles/{number}"
         try:
             self._page.goto(url, wait_until="domcontentloaded", timeout=self.config.browser_wait_seconds * 1000)
             result = self._read_current_page()
@@ -448,7 +450,7 @@ class BrowserLookup:
             return FetchResult(None, "浏览器页面不存在", blocked=True)
 
         locator = self._page.locator(
-            'a[href^="/actresses/"], a[href*="fc2ppvdb.com/actresses/"]'
+            'a[href^="/actresses/"], a[href*="fc2cmadb.com/actresses/"]'
         ).first
         try:
             locator.wait_for(timeout=5000)

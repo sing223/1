@@ -26,6 +26,10 @@ class MainHelpersTest(unittest.TestCase):
         html = '<a href="/actresses/123">女优A</a><a href="/actresses/456">女优B</a>'
         self.assertEqual(main.parse_first_actress(html), "女优A")
 
+    def test_parse_first_actress_from_absolute_fc2cmadb_link(self):
+        html = '<a href="https://fc2cmadb.com/actresses/123">女优A</a>'
+        self.assertEqual(main.parse_first_actress(html), "女优A")
+
     def test_parse_first_actress_from_label_text(self):
         html = '<div>ID: 4566405</div><div>女优：小春</div><div>马赛克：截图</div>'
         self.assertEqual(main.parse_first_actress(html), "小春")
@@ -49,7 +53,7 @@ class MainHelpersTest(unittest.TestCase):
         self.assertEqual(main.parse_first_actress(html), "小春")
 
     def test_parse_first_actress_returns_none_for_login_page(self):
-        html = '<form method="POST" action="https://fc2ppvdb.com/login"></form>'
+        html = '<form method="POST" action="https://fc2cmadb.com/login"></form>'
         self.assertIsNone(main.parse_first_actress(html))
 
     def test_move_one_file_creates_named_target_directory(self):
@@ -137,7 +141,7 @@ class MainHelpersTest(unittest.TestCase):
         create_session.return_value = Mock()
         fetch_actress_name.return_value = main.FetchResult(
             None,
-            "访问受限或 Cookie 已失效，请刷新 fc2ppvdb Cookie 后重试",
+            "访问受限或 Cookie 已失效，请刷新 fc2cmadb.com Cookie 后重试",
             blocked=True,
         )
 
@@ -401,7 +405,7 @@ class MainHelpersTest(unittest.TestCase):
             self.assertEqual(failed, [])
             self.assertEqual(organized_dirs, ["小春"])
             self.assertIn("1234567,小春", map_path.read_text(encoding="utf-8-sig"))
-            webbrowser_open.assert_called_once_with("https://fc2ppvdb.com/articles/1234567")
+            webbrowser_open.assert_called_once_with("https://fc2cmadb.com/articles/1234567")
             create_session.assert_not_called()
 
     @patch("main.create_session")
@@ -445,7 +449,7 @@ class MainHelpersTest(unittest.TestCase):
 
         self.assertEqual(remaining, cache)
         self.assertEqual(len(failed), 1)
-        webbrowser_open.assert_called_once_with("https://fc2ppvdb.com/articles/1234567")
+        webbrowser_open.assert_called_once_with("https://fc2cmadb.com/articles/1234567")
         create_session.assert_not_called()
         move_one_file.assert_not_called()
 
