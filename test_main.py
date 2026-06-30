@@ -77,6 +77,25 @@ class MainHelpersTest(unittest.TestCase):
         html = '<a href="https://fc2cmadb.com/login">登录</a>'
         self.assertFalse(main.is_access_blocked(html))
 
+    def test_cloudflare_resource_name_alone_is_not_access_blocked(self):
+        html = """
+        <html>
+          <head><title>FC2CMADB</title></head>
+          <body><script src="/assets/cloudflare-helper.js"></script></body>
+        </html>
+        """
+        self.assertFalse(main.is_access_blocked(html))
+
+    def test_cloudflare_challenge_page_is_access_blocked(self):
+        cases = [
+            "<html><head><title>Just a moment...</title></head></html>",
+            '<main id="challenge-running">Checking your browser</main>',
+            "<p>Enable JavaScript and cookies to continue</p>",
+        ]
+        for html in cases:
+            with self.subTest(html=html):
+                self.assertTrue(main.is_access_blocked(html))
+
     def test_parse_first_actress_does_not_return_field_label(self):
         html = "<table><tr><th>女優：</th><td></td></tr></table>"
         self.assertIsNone(main.parse_first_actress(html))

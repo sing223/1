@@ -358,16 +358,29 @@ def parse_first_actress(html: str) -> Optional[str]:
 
 
 def is_access_blocked(html: str) -> bool:
-    markers = [
+    strong_markers = [
+        'id="challenge-running"',
+        "id='challenge-running'",
+        'id="cf-challenge-running"',
+        "id='cf-challenge-running'",
         "cf-browser-verification",
-        "cf-challenge",
-        "cf-turnstile",
-        "cloudflare",
-        "Just a moment",
-        "Checking your browser",
+        "checking your browser before accessing",
+        "enable javascript and cookies to continue",
+        "performing security verification",
     ]
     lowered = html.lower()
-    return any(marker.lower() in lowered for marker in markers)
+    if any(marker in lowered for marker in strong_markers):
+        return True
+
+    title_match = re.search(r"(?is)<title[^>]*>(.*?)</title>", html)
+    if not title_match:
+        return False
+    title = strip_tags(title_match.group(1)).lower()
+    return title in {
+        "just a moment...",
+        "just a moment…",
+        "attention required! | cloudflare",
+    }
 
 
 def fetch_actress_name(session: requests.Session, number: str, timeout: int) -> FetchResult:
