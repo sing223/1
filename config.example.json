@@ -6,7 +6,7 @@
   "overwrite_existing": true,
   "request_timeout": 20,
   "actress_map_csv": "actress_map.csv",
-  "lookup_mode": "hybrid",
+  "lookup_mode": "browser",
   "browser_profile_dir": "browser_profile",
   "browser_headless": false,
   "browser_wait_seconds": 60,

@@ -109,7 +109,7 @@ def load_config() -> Config:
 
     lookup_mode = str(raw.get("lookup_mode", "")).strip().lower()
     if not lookup_mode:
-        lookup_mode = "hybrid"
+        lookup_mode = "browser"
     if lookup_mode not in {"csv_only", "manual", "browser", "requests", "hybrid"}:
         raise ValueError("lookup_mode 只能是 csv_only、manual、browser、requests 或 hybrid")
 
@@ -163,7 +163,7 @@ def load_actress_map(path: Path) -> Dict[str, str]:
             if number_field and actress_field:
                 for row in reader:
                     number = normalize_number(row.get(number_field, ""))
-                    actress = sanitize_folder_name(row.get(actress_field, ""))
+                    actress = normalize_actress_name(row.get(actress_field, ""))
                     if number and actress:
                         actress_map[number] = actress
                 logging.info("已读取女优映射表：%s 条", len(actress_map))
@@ -175,7 +175,7 @@ def load_actress_map(path: Path) -> Dict[str, str]:
             if len(row) < 2:
                 continue
             number = normalize_number(row[0])
-            actress = sanitize_folder_name(row[1])
+            actress = normalize_actress_name(row[1])
             if number and actress and number.lower() not in {"number", "fc2", "id", "番号"}:
                 actress_map[number] = actress
 
@@ -214,6 +214,25 @@ def sanitize_folder_name(name: str) -> str:
     cleaned = INVALID_WINDOWS_NAME_CHARS.sub("_", name)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
     return cleaned or "未知女优"
+
+
+INVALID_ACTRESS_NAMES = {
+    "",
+    "女优",
+    "女優",
+    "出演",
+    "出演者",
+    "actor",
+    "actress",
+    "未知女优",
+}
+
+
+def normalize_actress_name(name: str) -> Optional[str]:
+    cleaned = sanitize_folder_name(str(name))
+    if cleaned.strip().lower() in INVALID_ACTRESS_NAMES:
+        return None
+    return cleaned
 
 
 def path_is_inside(child: Path, parent: Path) -> bool:
@@ -335,7 +354,7 @@ def parse_first_actress(html: str) -> Optional[str]:
         if separator in actress:
             actress = actress.split(separator)[0]
             break
-    return sanitize_folder_name(actress)
+    return normalize_actress_name(actress)
 
 
 def is_access_blocked(html: str) -> bool:
@@ -382,7 +401,10 @@ def manual_lookup(number: str) -> FetchResult:
         return FetchResult(None, "用户结束本轮手动输入", blocked=True)
     if not value:
         return FetchResult(None, "手动模式未输入女优名，已保留缓存等待重试")
-    return FetchResult(sanitize_folder_name(value), None)
+    actress = normalize_actress_name(value)
+    if not actress:
+        return FetchResult(None, "输入的内容不是有效女优名，已保留缓存等待重试")
+    return FetchResult(actress, None)
 
 
 class BrowserLookup:
@@ -412,6 +434,22 @@ class BrowserLookup:
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._context is not None:
             self._context.close()
+
+    def prepare_login(self) -> None:
+        self._ensure_started()
+        if self._page is None:
+            raise RuntimeError("CloakBrowser 页面启动失败")
+        if self.config.browser_headless:
+            raise RuntimeError("登录准备必须使用有头模式，请将 browser_headless 设为 false")
+
+        self._page.goto(
+            TARGET_BASE_URL,
+            wait_until="domcontentloaded",
+            timeout=self.config.browser_wait_seconds * 1000,
+        )
+        print("\nCloakBrowser 已打开 FC2CMADB 首页。")
+        print("请先在浏览器右上角完成登录，确认登录成功后再回到这里。")
+        input("登录完成后按回车开始自动抓取...")
 
     def lookup(self, number: str) -> FetchResult:
         try:
@@ -463,7 +501,7 @@ class BrowserLookup:
             try:
                 if locator.count() == 0:
                     continue
-                actress = sanitize_folder_name(locator.first.inner_text(timeout=5000))
+                actress = normalize_actress_name(locator.first.inner_text(timeout=5000))
                 if actress:
                     logging.info("浏览器解析到女优名：%s", actress)
                     return FetchResult(actress, None)
@@ -628,6 +666,8 @@ def main() -> int:
         logging.info("开始处理缓存，共 %s 个视频", len(cache))
         if config.lookup_mode in {"browser", "hybrid"}:
             with BrowserLookup(config) as browser_lookup:
+                if config.lookup_mode == "browser":
+                    browser_lookup.prepare_login()
                 remaining = process_cache(config, cache, failed, organized_dirs, actress_map, browser_lookup)
         else:
             remaining = process_cache(config, cache, failed, organized_dirs, actress_map)

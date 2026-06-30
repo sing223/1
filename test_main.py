@@ -22,6 +22,11 @@ class MainHelpersTest(unittest.TestCase):
     def test_sanitize_folder_name_removes_windows_invalid_chars(self):
         self.assertEqual(main.sanitize_folder_name(' A/B:C*D?E"F<G>H| '), "A_B_C_D_E_F_G_H_")
 
+    def test_normalize_actress_name_rejects_field_labels(self):
+        for value in ["女优", "女優", "出演者", "Actor", "Actress", "", "未知女优"]:
+            with self.subTest(value=value):
+                self.assertIsNone(main.normalize_actress_name(value))
+
     def test_parse_first_actress_from_actress_link(self):
         html = '<a href="/actresses/123">女优A</a><a href="/actresses/456">女优B</a>'
         self.assertEqual(main.parse_first_actress(html), "女优A")
@@ -71,6 +76,22 @@ class MainHelpersTest(unittest.TestCase):
     def test_login_link_alone_is_not_treated_as_access_blocked(self):
         html = '<a href="https://fc2cmadb.com/login">登录</a>'
         self.assertFalse(main.is_access_blocked(html))
+
+    def test_parse_first_actress_does_not_return_field_label(self):
+        html = "<table><tr><th>女優：</th><td></td></tr></table>"
+        self.assertIsNone(main.parse_first_actress(html))
+
+    def test_load_actress_map_skips_invalid_field_label(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "actress_map.csv"
+            path.write_text(
+                "number,actress\n1234567,女優\n7654321,えりか\n",
+                encoding="utf-8-sig",
+            )
+
+            result = main.load_actress_map(path)
+
+            self.assertEqual(result, {"7654321": "えりか"})
 
     def test_move_one_file_creates_named_target_directory(self):
         with TemporaryDirectory() as tmp:
