@@ -3,9 +3,11 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import random
 import re
 import shutil
 import sys
+import time
 import webbrowser
 from dataclasses import dataclass
 from datetime import datetime
@@ -45,6 +47,8 @@ TARGET_BASE_URL = f"https://{TARGET_DOMAIN}"
 DEFAULT_VIDEO_EXTENSIONS = [".mp4", ".mkv", ".avi", ".wmv", ".mov", ".flv", ".ts"]
 FC2_PATTERN = re.compile(r"(?i)\bfc2(?:\s*[-_ ]?\s*ppv)?\s*[-_ ]?\s*(\d{4,10})\b")
 INVALID_WINDOWS_NAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+LOOKUP_DELAY_MIN_SECONDS = 5
+LOOKUP_DELAY_MAX_SECONDS = 20
 
 
 @dataclass
@@ -233,6 +237,13 @@ def normalize_actress_name(name: str) -> Optional[str]:
     if cleaned.strip().lower() in INVALID_ACTRESS_NAMES:
         return None
     return cleaned
+
+
+def wait_before_browser_lookup() -> int:
+    seconds = random.randint(LOOKUP_DELAY_MIN_SECONDS, LOOKUP_DELAY_MAX_SECONDS)
+    logging.info("下一个视频检索前随机等待 %s 秒", seconds)
+    time.sleep(seconds)
+    return seconds
 
 
 def path_is_inside(child: Path, parent: Path) -> bool:
@@ -474,6 +485,7 @@ class BrowserLookup:
 
         url = f"{TARGET_BASE_URL}/articles/{number}"
         try:
+            wait_before_browser_lookup()
             self._page.goto(url, wait_until="domcontentloaded", timeout=self.config.browser_wait_seconds * 1000)
             result = self._read_current_page()
             if result.actress or not result.blocked:

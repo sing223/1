@@ -27,6 +27,17 @@ class MainHelpersTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIsNone(main.normalize_actress_name(value))
 
+    @patch("main.time.sleep")
+    @patch("main.random.randint", return_value=13)
+    def test_wait_before_browser_lookup_uses_random_5_to_20_seconds(
+        self, randint, sleep
+    ):
+        seconds = main.wait_before_browser_lookup()
+
+        self.assertEqual(seconds, 13)
+        randint.assert_called_once_with(5, 20)
+        sleep.assert_called_once_with(13)
+
     def test_parse_first_actress_from_actress_link(self):
         html = '<a href="/actresses/123">女优A</a><a href="/actresses/456">女优B</a>'
         self.assertEqual(main.parse_first_actress(html), "女优A")
