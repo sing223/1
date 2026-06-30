@@ -30,6 +30,18 @@ class MainHelpersTest(unittest.TestCase):
         html = '<a href="https://fc2cmadb.com/actresses/123">女优A</a>'
         self.assertEqual(main.parse_first_actress(html), "女优A")
 
+    def test_parse_first_actress_from_fc2cmadb_detail_row(self):
+        html = """
+        <tr>
+          <th>女優：</th>
+          <td>
+            <a class="link link-primary link-hover font-medium mr-2"
+               href="https://fc2cmadb.com/actresses/4225">えりか</a>
+          </td>
+        </tr>
+        """
+        self.assertEqual(main.parse_first_actress(html), "えりか")
+
     def test_parse_first_actress_from_label_text(self):
         html = '<div>ID: 4566405</div><div>女优：小春</div><div>马赛克：截图</div>'
         self.assertEqual(main.parse_first_actress(html), "小春")
@@ -55,6 +67,10 @@ class MainHelpersTest(unittest.TestCase):
     def test_parse_first_actress_returns_none_for_login_page(self):
         html = '<form method="POST" action="https://fc2cmadb.com/login"></form>'
         self.assertIsNone(main.parse_first_actress(html))
+
+    def test_login_link_alone_is_not_treated_as_access_blocked(self):
+        html = '<a href="https://fc2cmadb.com/login">登录</a>'
+        self.assertFalse(main.is_access_blocked(html))
 
     def test_move_one_file_creates_named_target_directory(self):
         with TemporaryDirectory() as tmp:

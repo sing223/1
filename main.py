@@ -346,7 +346,6 @@ def is_access_blocked(html: str) -> bool:
         "cloudflare",
         "Just a moment",
         "Checking your browser",
-        f"{TARGET_BASE_URL}/login",
     ]
     lowered = html.lower()
     return any(marker.lower() in lowered for marker in markers)
@@ -449,18 +448,29 @@ class BrowserLookup:
         if self._page is None:
             return FetchResult(None, "浏览器页面不存在", blocked=True)
 
-        locator = self._page.locator(
-            'a[href^="/actresses/"], a[href*="fc2cmadb.com/actresses/"]'
-        ).first
-        try:
-            locator.wait_for(timeout=5000)
-            actress = sanitize_folder_name(locator.inner_text(timeout=5000))
-            if actress:
-                return FetchResult(actress, None)
-        except PlaywrightTimeoutError:
-            pass
-        except PlaywrightError as exc:
-            return FetchResult(None, f"读取女优链接失败：{exc}")
+        selectors = [
+            # FC2CMADB 详情表格中的“女優”行，优先使用最精确的结构。
+            'tr:has(th:has-text("女優")) a[href*="/actresses/"]',
+            'tr:has(th:has-text("女优")) a[href*="/actresses/"]',
+            # 当前站点使用的女优链接 class。
+            'a.link.link-primary.link-hover.font-medium.mr-2[href*="/actresses/"]',
+            # 页面结构变化时的保底选择器。
+            'a[href^="/actresses/"], a[href*="fc2cmadb.com/actresses/"]',
+        ]
+        last_error = None
+        for selector in selectors:
+            locator = self._page.locator(selector)
+            try:
+                if locator.count() == 0:
+                    continue
+                actress = sanitize_folder_name(locator.first.inner_text(timeout=5000))
+                if actress:
+                    logging.info("浏览器解析到女优名：%s", actress)
+                    return FetchResult(actress, None)
+            except PlaywrightTimeoutError:
+                continue
+            except PlaywrightError as exc:
+                last_error = exc
 
         html = self._page.content()
         if is_access_blocked(html):
@@ -468,6 +478,8 @@ class BrowserLookup:
         actress = parse_first_actress(html)
         if actress:
             return FetchResult(actress, None)
+        if last_error is not None:
+            return FetchResult(None, f"读取女优链接失败：{last_error}")
         return FetchResult(None, "未解析到女优名，已保留缓存等待重试")
 
 
