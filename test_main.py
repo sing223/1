@@ -144,6 +144,24 @@ class MainHelpersTest(unittest.TestCase):
         """
         self.assertEqual(main.parse_first_actress(html), "えりか")
 
+    def test_browser_waits_for_dynamically_rendered_actress_link(self):
+        browser_lookup = object.__new__(main.BrowserLookup)
+        page = Mock()
+        browser_lookup._page = page
+        locator_group = Mock()
+        actress_link = Mock()
+        locator_group.first = actress_link
+        page.locator.return_value = locator_group
+        actress_link.inner_text.return_value = "アキナ"
+
+        result = browser_lookup._read_current_page()
+
+        actress_link.wait_for.assert_called_once_with(
+            state="attached",
+            timeout=main.ACTRESS_LINK_WAIT_MILLISECONDS,
+        )
+        self.assertEqual(result.actress, "アキナ")
+
     def test_parse_first_actress_from_label_text(self):
         html = '<div>ID: 4566405</div><div>女优：小春</div><div>马赛克：截图</div>'
         self.assertEqual(main.parse_first_actress(html), "小春")

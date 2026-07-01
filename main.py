@@ -54,6 +54,7 @@ FC2_PATTERN = re.compile(r"(?i)\bfc2(?:\s*[-_ ]?\s*ppv)?\s*[-_ ]?\s*(\d{4,10})\b
 INVALID_WINDOWS_NAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 LOOKUP_DELAY_MIN_SECONDS = 5
 LOOKUP_DELAY_MAX_SECONDS = 20
+ACTRESS_LINK_WAIT_MILLISECONDS = 10_000
 
 
 @dataclass
@@ -588,6 +589,8 @@ class BrowserLookup:
         url = getattr(request, "url", "")
         if "challenges.cloudflare.com" not in url.lower():
             return
+        if "brunhild.challenges.cloudflare.com" in url.lower():
+            return
         failure = getattr(request, "failure", None)
         logging.warning("Turnstile 网络请求失败：%s；%s", url, failure or "未知错误")
 
@@ -595,6 +598,12 @@ class BrowserLookup:
     def _log_turnstile_console_error(message) -> None:
         text = getattr(message, "text", "")
         if not any(word in text.lower() for word in ("turnstile", "cloudflare", "challenge")):
+            return
+        lowered = text.lower()
+        if (
+            "private access token challenge" in lowered
+            or "preloaded using link preload but not used" in lowered
+        ):
             return
         logging.warning("Turnstile 控制台信息：%s", text)
 
@@ -711,29 +720,26 @@ class BrowserLookup:
         if self._page is None:
             return FetchResult(None, "浏览器页面不存在", blocked=True)
 
-        selectors = [
-            # FC2CMADB 详情表格中的“女優”行，优先使用最精确的结构。
-            'tr:has(th:has-text("女優")) a[href*="/actresses/"]',
-            'tr:has(th:has-text("女优")) a[href*="/actresses/"]',
-            # 当前站点使用的女优链接 class。
-            'a.link.link-primary.link-hover.font-medium.mr-2[href*="/actresses/"]',
-            # 页面结构变化时的保底选择器。
-            'a[href^="/actresses/"], a[href*="fc2cmadb.com/actresses/"]',
-        ]
+        # FC2CMADB 使用前端动态渲染。domcontentloaded 时表格可能已经出现，
+        # 但女优链接尚未挂载，因此必须等待链接进入 DOM，不能立即 count()。
+        locator = self._page.locator(
+            'main table a[href*="/actresses/"], '
+            'a.link.link-primary.link-hover.font-medium.mr-2[href*="/actresses/"]'
+        ).first
         last_error = None
-        for selector in selectors:
-            locator = self._page.locator(selector)
-            try:
-                if locator.count() == 0:
-                    continue
-                actress = normalize_actress_name(locator.first.inner_text(timeout=5000))
-                if actress:
-                    logging.info("浏览器解析到女优名：%s", actress)
-                    return FetchResult(actress, None)
-            except PlaywrightTimeoutError:
-                continue
-            except PlaywrightError as exc:
-                last_error = exc
+        try:
+            locator.wait_for(
+                state="attached",
+                timeout=ACTRESS_LINK_WAIT_MILLISECONDS,
+            )
+            actress = normalize_actress_name(locator.inner_text(timeout=5000))
+            if actress:
+                logging.info("浏览器解析到女优名：%s", actress)
+                return FetchResult(actress, None)
+        except PlaywrightTimeoutError:
+            pass
+        except PlaywrightError as exc:
+            last_error = exc
 
         html = self._page.content()
         if is_access_blocked(html):
