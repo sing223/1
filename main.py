@@ -1,3 +1,14 @@
+"""根据 FC2 番号查询女优名，并把视频整理到对应的女优目录。
+
+默认流程：
+1. 扫描配置的视频目录并建立可恢复的缓存。
+2. 启动普通 Chrome，让用户在脚本连接前手动完成登录和 Turnstile。
+3. 登录后通过 CDP 接管同一浏览器，逐条查询 FC2CMADB。
+4. 将查询结果写入本地映射表，并移动视频到女优同名目录。
+
+缓存、失败记录和持久浏览器 Profile 都保存在脚本目录，但不会提交到 Git。
+"""
+
 from __future__ import annotations
 
 import csv
@@ -59,6 +70,8 @@ ACTRESS_LINK_WAIT_MILLISECONDS = 10_000
 
 @dataclass
 class Config:
+    """config.json 解析后的强类型运行配置。"""
+
     video_dir: Path
     cookie: str
     video_extensions: List[str]
@@ -78,12 +91,16 @@ class Config:
 
 @dataclass
 class FetchResult:
+    """一次女优查询的结果；blocked 表示遇到验证或访问限制。"""
+
     actress: Optional[str]
     error: Optional[str]
     blocked: bool = False
 
 
 def setup_logging() -> None:
+    """同时向控制台和 UTF-8 日志文件输出运行信息。"""
+
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
@@ -96,6 +113,8 @@ def setup_logging() -> None:
 
 
 def load_config() -> Config:
+    """读取并校验配置，同时把相对路径转换为脚本目录下的绝对路径。"""
+
     if not CONFIG_PATH.exists():
         raise FileNotFoundError(f"找不到配置文件：{CONFIG_PATH}")
 
@@ -150,6 +169,8 @@ def load_config() -> Config:
 
 
 def load_json_file(path: Path, default):
+    """安全读取运行状态 JSON；损坏时返回默认值，避免整个任务中断。"""
+
     if not path.exists():
         return default
     try:
@@ -161,6 +182,8 @@ def load_json_file(path: Path, default):
 
 
 def save_json_file(path: Path, data) -> None:
+    """先写临时文件再原子替换，降低程序中断导致 JSON 损坏的概率。"""
+
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     with tmp_path.open("w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -168,6 +191,8 @@ def save_json_file(path: Path, data) -> None:
 
 
 def load_actress_map(path: Path) -> Dict[str, str]:
+    """读取番号到女优名的 CSV 映射，并忽略“女優”等历史错误占位值。"""
+
     if not path.exists():
         logging.warning("女优映射表不存在：%s", path)
         return {}
@@ -203,6 +228,8 @@ def load_actress_map(path: Path) -> Dict[str, str]:
 
 
 def append_actress_map(path: Path, number: str, actress: str) -> None:
+    """把新查询结果追加到 CSV，供后续运行直接复用。"""
+
     path.parent.mkdir(parents=True, exist_ok=True)
     needs_header = not path.exists() or path.stat().st_size == 0
     with path.open("a", encoding="utf-8-sig", newline="") as f:
@@ -214,6 +241,8 @@ def append_actress_map(path: Path, number: str, actress: str) -> None:
 
 
 def normalize_number(value: str) -> Optional[str]:
+    """从 CSV 或文本中提取纯数字 FC2 番号。"""
+
     text = str(value).strip()
     if not text:
         return None
@@ -225,11 +254,15 @@ def normalize_number(value: str) -> Optional[str]:
 
 
 def extract_fc2_number(filename: str) -> Optional[str]:
+    """从常见的 FC2/FC2-PPV 文件名格式中提取番号。"""
+
     match = FC2_PATTERN.search(filename)
     return match.group(1) if match else None
 
 
 def sanitize_folder_name(name: str) -> str:
+    """移除 Windows 文件夹名不允许的字符。"""
+
     cleaned = INVALID_WINDOWS_NAME_CHARS.sub("_", name)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
     return cleaned or "未知女优"
@@ -248,6 +281,8 @@ INVALID_ACTRESS_NAMES = {
 
 
 def normalize_actress_name(name: str) -> Optional[str]:
+    """清理女优名，并拒绝字段标题、空值等无效结果。"""
+
     cleaned = sanitize_folder_name(str(name))
     if cleaned.strip().lower() in INVALID_ACTRESS_NAMES:
         return None
@@ -255,6 +290,8 @@ def normalize_actress_name(name: str) -> Optional[str]:
 
 
 def wait_before_browser_lookup() -> int:
+    """每次联网查询前随机等待 5~20 秒，降低连续访问频率。"""
+
     seconds = random.randint(LOOKUP_DELAY_MIN_SECONDS, LOOKUP_DELAY_MAX_SECONDS)
     logging.info("下一个视频检索前随机等待 %s 秒", seconds)
     time.sleep(seconds)
@@ -262,6 +299,8 @@ def wait_before_browser_lookup() -> int:
 
 
 def find_chrome_executable(configured: Optional[Path] = None) -> Path:
+    """优先采用配置路径，否则查找 Windows 常见 Chrome 安装位置。"""
+
     candidates = []
     if configured:
         candidates.append(configured)
@@ -278,12 +317,16 @@ def find_chrome_executable(configured: Optional[Path] = None) -> Path:
 
 
 def reserve_local_port() -> int:
+    """向系统申请一个暂时空闲的本地端口，用于 Chrome DevTools Protocol。"""
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         return int(listener.getsockname()[1])
 
 
 def build_chrome_cdp_command(executable: Path, profile: Path, port: int) -> List[str]:
+    """生成普通 Chrome 启动命令；此阶段不建立 Playwright/CDP 连接。"""
+
     return [
         str(executable),
         f"--remote-debugging-port={port}",
@@ -295,6 +338,8 @@ def build_chrome_cdp_command(executable: Path, profile: Path, port: int) -> List
 
 
 def path_is_inside(child: Path, parent: Path) -> bool:
+    """判断 child 是否位于 parent 内部，用于避免重复扫描输出目录。"""
+
     try:
         child.resolve().relative_to(parent.resolve())
         return True
@@ -303,6 +348,8 @@ def path_is_inside(child: Path, parent: Path) -> bool:
 
 
 def should_skip_path(path: Path, video_root: Path, skipped_dirs: Iterable[Path]) -> bool:
+    """判断路径是否属于已经整理过或需要跳过的目录。"""
+
     resolved = path.resolve()
     for skipped in skipped_dirs:
         if path_is_inside(resolved, skipped):
@@ -311,6 +358,8 @@ def should_skip_path(path: Path, video_root: Path, skipped_dirs: Iterable[Path])
 
 
 def iter_video_files(config: Config, organized_dirs: Iterable[str]) -> Iterable[Path]:
+    """递归枚举未整理的视频文件。"""
+
     skipped_dirs = [config.video_dir / config.uncategorized_folder]
     skipped_dirs.extend(config.video_dir / name for name in organized_dirs if name)
 
@@ -324,6 +373,8 @@ def iter_video_files(config: Config, organized_dirs: Iterable[str]) -> Iterable[
 
 
 def build_cache(config: Config, existing_cache: Dict[str, dict], organized_dirs: Iterable[str]) -> Dict[str, dict]:
+    """合并已有缓存与本次扫描结果，使中断后的任务可以继续运行。"""
+
     cache = {
         key: item
         for key, item in existing_cache.items()
@@ -351,6 +402,8 @@ def build_cache(config: Config, existing_cache: Dict[str, dict], organized_dirs:
 
 
 def apply_cookie(session: requests.Session, cookie_text: str) -> None:
+    """把配置中的 Cookie 字符串加载到 requests 会话。"""
+
     if not cookie_text:
         logging.warning("config.json 未填写 cookie，详情页可能无法访问")
         return
@@ -362,6 +415,8 @@ def apply_cookie(session: requests.Session, cookie_text: str) -> None:
 
 
 def create_session(config: Config) -> requests.Session:
+    """创建带常用浏览器请求头和可选 Cookie 的 HTTP 会话。"""
+
     if requests is None:
         raise RuntimeError("缺少依赖 requests，请先运行：pip install -r requirements.txt")
 
@@ -381,12 +436,16 @@ def create_session(config: Config) -> requests.Session:
 
 
 def strip_tags(html: str) -> str:
+    """移除脚本、样式和 HTML 标签，保留可读文本。"""
+
     text = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     return re.sub(r"\s+", " ", unescape(text)).strip()
 
 
 def first_match(html: str, patterns: Iterable[str]) -> Optional[str]:
+    """依次尝试正则表达式并返回第一个非空文本结果。"""
+
     for pattern in patterns:
         match = re.search(pattern, html, flags=re.IGNORECASE | re.DOTALL)
         if match:
@@ -397,6 +456,8 @@ def first_match(html: str, patterns: Iterable[str]) -> Optional[str]:
 
 
 def parse_first_actress(html: str) -> Optional[str]:
+    """从静态 HTML 中解析第一个女优链接，作为浏览器 DOM 定位的后备方案。"""
+
     if re.search(r'<form[^>]+action=["\']https://fc2cmadb\.com/login["\']', html, re.IGNORECASE):
         return None
 
@@ -417,6 +478,8 @@ def parse_first_actress(html: str) -> Optional[str]:
 
 
 def is_access_blocked(html: str) -> bool:
+    """仅识别明确的 Cloudflare 挑战页，避免把普通 CF 资源误判为验证页。"""
+
     strong_markers = [
         'id="challenge-running"',
         "id='challenge-running'",
@@ -443,6 +506,8 @@ def is_access_blocked(html: str) -> bool:
 
 
 def fetch_actress_name(session: requests.Session, number: str, timeout: int) -> FetchResult:
+    """使用普通 HTTP 请求查询女优名，主要供 requests/hybrid 模式使用。"""
+
     if requests is None:
         return FetchResult(None, "缺少依赖 requests，请先运行：pip install -r requirements.txt", blocked=True)
 
@@ -463,6 +528,8 @@ def fetch_actress_name(session: requests.Session, number: str, timeout: int) -> 
 
 
 def manual_lookup(number: str) -> FetchResult:
+    """打开系统默认浏览器，让用户手动输入女优名。"""
+
     url = f"{TARGET_BASE_URL}/articles/{number}"
     print(f"\n需要手动确认 FC2-{number} 的女优名。")
     print(f"已打开网页：{url}")
@@ -480,6 +547,15 @@ def manual_lookup(number: str) -> FetchResult:
 
 
 class BrowserLookup:
+    """管理登录、浏览器接管和 FC2CMADB 页面解析。
+
+    chrome_cdp 后端采用两阶段启动：
+    - 第一阶段只启动普通 Chrome，用户手动完成登录和 Turnstile。
+    - 用户确认登录成功后，第二阶段才通过 CDP 接管浏览器。
+
+    这样可以避免登录验证码在 Playwright/CDP 已连接时出现跨域通信错误。
+    """
+
     def __init__(self, config: Config):
         if config.browser_backend == "cloak" and launch_persistent_context is None:
             raise RuntimeError(
@@ -501,6 +577,8 @@ class BrowserLookup:
         return self
 
     def _ensure_started(self) -> None:
+        """确保浏览器已启动并且脚本已经取得页面控制权。"""
+
         if self._context is not None:
             return
         if self.config.browser_backend == "cloak":
@@ -515,6 +593,8 @@ class BrowserLookup:
         self._attach_to_active_page()
 
     def _attach_to_active_page(self) -> None:
+        """选择当前标签页，并挂载与 Turnstile 相关的诊断日志。"""
+
         if self._context is None:
             raise RuntimeError("浏览器上下文尚未建立")
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
@@ -522,6 +602,8 @@ class BrowserLookup:
         self._page.on("console", self._log_turnstile_console_error)
 
     def _launch_system_chrome_process(self) -> None:
+        """启动普通 Chrome 并等待调试端口可用，但暂不连接 Playwright。"""
+
         if self._browser_process is not None and self._browser_process.poll() is None:
             return
         executable = find_chrome_executable(self.config.chrome_executable)
@@ -553,6 +635,8 @@ class BrowserLookup:
         raise RuntimeError(f"系统 Chrome 调试端口启动超时：{last_error}")
 
     def _connect_system_chrome(self) -> None:
+        """在用户完成登录后，通过 CDP 连接已启动的普通 Chrome。"""
+
         if self._context is not None:
             return
         if not self._cdp_endpoint:
@@ -565,6 +649,8 @@ class BrowserLookup:
         self._context = self._browser.contexts[0]
 
     def _stop_system_chrome(self) -> None:
+        """关闭脚本创建的 CDP、Playwright 和 Chrome 进程。"""
+
         if self._browser is not None:
             try:
                 self._browser.close()
@@ -616,6 +702,8 @@ class BrowserLookup:
         self._page = None
 
     def prepare_login(self) -> None:
+        """打开登录入口，并保证 Chrome 模式在登录完成前不连接 CDP。"""
+
         if self.config.browser_backend == "chrome_cdp":
             if self.config.browser_headless:
                 raise RuntimeError("登录准备必须使用有头模式，请将 browser_headless 设为 false")
@@ -657,6 +745,8 @@ class BrowserLookup:
             print("请不要关闭浏览器；等待验证完成或切换网络后重试。")
 
     def _turnstile_state(self) -> str:
+        """返回 Cloak 后端登录框的 Turnstile 状态。"""
+
         if self._page is None:
             return "absent"
         try:
@@ -685,6 +775,8 @@ class BrowserLookup:
         return self._turnstile_state() in {"missing", "pending"}
 
     def lookup(self, number: str) -> FetchResult:
+        """导航到指定番号详情页，并读取页面中的女优名。"""
+
         try:
             self._ensure_started()
         except Exception as exc:
@@ -717,6 +809,8 @@ class BrowserLookup:
             return FetchResult(None, f"浏览器查询失败：{exc}", blocked=True)
 
     def _read_current_page(self) -> FetchResult:
+        """等待动态女优链接挂载后读取；超时再退回静态 HTML 解析。"""
+
         if self._page is None:
             return FetchResult(None, "浏览器页面不存在", blocked=True)
 
@@ -753,6 +847,8 @@ class BrowserLookup:
 
 
 def move_one_file(source: Path, target_dir: Path, overwrite_existing: bool) -> Path:
+    """创建目标目录并移动单个文件；按配置决定是否覆盖同名文件。"""
+
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / source.name
 
@@ -767,6 +863,8 @@ def move_one_file(source: Path, target_dir: Path, overwrite_existing: bool) -> P
 
 
 def record_failure(failed: List[dict], item: dict, reason: str, moved_to: Optional[Path] = None) -> None:
+    """追加带时间戳的失败记录，便于后续排查和重试。"""
+
     failed.append(
         {
             "number": item.get("number"),
@@ -788,6 +886,8 @@ def process_cache(
     actress_map: Dict[str, str],
     browser_lookup: Optional[BrowserLookup] = None,
 ) -> Dict[str, dict]:
+    """逐条处理缓存，并返回本轮结束后仍需重试的项目。"""
+
     session = create_session(config) if config.lookup_mode in {"requests", "hybrid"} else None
     remaining = dict(cache)
 
@@ -870,6 +970,8 @@ def process_cache(
 
 
 def main() -> int:
+    """程序入口：加载状态、扫描文件、执行查询、持久化处理结果。"""
+
     setup_logging()
     try:
         config = load_config()
