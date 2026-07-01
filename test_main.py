@@ -72,6 +72,24 @@ class MainHelpersTest(unittest.TestCase):
         self.assertIn(main.TARGET_BASE_URL, command)
         self.assertNotIn("--enable-automation", command)
 
+    @patch("builtins.input", return_value="")
+    def test_chrome_login_completes_before_cdp_connection(self, input_mock):
+        browser_lookup = object.__new__(main.BrowserLookup)
+        browser_lookup.config = Mock(
+            browser_backend="chrome_cdp",
+            browser_headless=False,
+        )
+        browser_lookup._launch_system_chrome_process = Mock()
+        browser_lookup._connect_system_chrome = Mock()
+        browser_lookup._attach_to_active_page = Mock()
+
+        browser_lookup.prepare_login()
+
+        browser_lookup._launch_system_chrome_process.assert_called_once_with()
+        input_mock.assert_called_once()
+        browser_lookup._connect_system_chrome.assert_called_once_with()
+        browser_lookup._attach_to_active_page.assert_called_once_with()
+
     def test_turnstile_pending_until_response_token_exists(self):
         browser_lookup = object.__new__(main.BrowserLookup)
         page = Mock()

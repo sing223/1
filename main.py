@@ -494,6 +494,7 @@ class BrowserLookup:
         self._playwright = None
         self._browser = None
         self._browser_process = None
+        self._cdp_endpoint = None
 
     def __enter__(self) -> "BrowserLookup":
         return self
@@ -508,12 +509,20 @@ class BrowserLookup:
                 humanize=True,
             )
         else:
-            self._start_system_chrome()
+            self._launch_system_chrome_process()
+            self._connect_system_chrome()
+        self._attach_to_active_page()
+
+    def _attach_to_active_page(self) -> None:
+        if self._context is None:
+            raise RuntimeError("浏览器上下文尚未建立")
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
         self._page.on("requestfailed", self._log_turnstile_request_failure)
         self._page.on("console", self._log_turnstile_console_error)
 
-    def _start_system_chrome(self) -> None:
+    def _launch_system_chrome_process(self) -> None:
+        if self._browser_process is not None and self._browser_process.poll() is None:
+            return
         executable = find_chrome_executable(self.config.chrome_executable)
         port = reserve_local_port()
         command = build_chrome_cdp_command(
@@ -528,23 +537,27 @@ class BrowserLookup:
             stderr=subprocess.DEVNULL,
             creationflags=creation_flags,
         )
-        endpoint = f"http://127.0.0.1:{port}"
+        self._cdp_endpoint = f"http://127.0.0.1:{port}"
         deadline = time.monotonic() + 20
         last_error = None
         while time.monotonic() < deadline:
             try:
-                response = requests.get(f"{endpoint}/json/version", timeout=1)
+                response = requests.get(f"{self._cdp_endpoint}/json/version", timeout=1)
                 response.raise_for_status()
-                break
+                return
             except requests.RequestException as exc:
                 last_error = exc
                 time.sleep(0.25)
-        else:
-            self._stop_system_chrome()
-            raise RuntimeError(f"系统 Chrome 调试端口启动超时：{last_error}")
+        self._stop_system_chrome()
+        raise RuntimeError(f"系统 Chrome 调试端口启动超时：{last_error}")
 
+    def _connect_system_chrome(self) -> None:
+        if self._context is not None:
+            return
+        if not self._cdp_endpoint:
+            raise RuntimeError("系统 Chrome 调试端口尚未启动")
         self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+        self._browser = self._playwright.chromium.connect_over_cdp(self._cdp_endpoint)
         if not self._browser.contexts:
             self._stop_system_chrome()
             raise RuntimeError("系统 Chrome 没有可用浏览器上下文")
@@ -568,6 +581,7 @@ class BrowserLookup:
                 except subprocess.TimeoutExpired:
                     self._browser_process.kill()
             self._browser_process = None
+        self._cdp_endpoint = None
 
     @staticmethod
     def _log_turnstile_request_failure(request) -> None:
@@ -593,6 +607,17 @@ class BrowserLookup:
         self._page = None
 
     def prepare_login(self) -> None:
+        if self.config.browser_backend == "chrome_cdp":
+            if self.config.browser_headless:
+                raise RuntimeError("登录准备必须使用有头模式，请将 browser_headless 设为 false")
+            self._launch_system_chrome_process()
+            print("\n系统 Chrome 已打开 FC2CMADB 首页。")
+            print("脚本尚未连接浏览器，请先正常完成登录和 Cloudflare 验证。")
+            input("确认已经登录成功后，按回车让脚本接管浏览器...")
+            self._connect_system_chrome()
+            self._attach_to_active_page()
+            return
+
         self._ensure_started()
         if self._page is None:
             raise RuntimeError("CloakBrowser 页面启动失败")
@@ -654,7 +679,7 @@ class BrowserLookup:
         try:
             self._ensure_started()
         except Exception as exc:
-            return FetchResult(None, f"CloakBrowser 启动失败：{exc}", blocked=True)
+            return FetchResult(None, f"浏览器启动失败：{exc}", blocked=True)
         if self._page is None:
             return FetchResult(None, "浏览器查询器尚未启动", blocked=True)
 
