@@ -450,8 +450,7 @@ class BrowserLookup:
         self._context = launch_persistent_context(
             str(self.config.browser_profile_dir),
             headless=self.config.browser_headless,
-            viewport={"width": 1280, "height": 900},
-            locale="zh-CN",
+            humanize=True,
         )
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
 
@@ -473,7 +472,34 @@ class BrowserLookup:
         )
         print("\nCloakBrowser 已打开 FC2CMADB 首页。")
         print("请先在浏览器右上角完成登录，确认登录成功后再回到这里。")
-        input("登录完成后按回车开始自动抓取...")
+        while True:
+            input("登录完成后按回车开始自动抓取...")
+            if not self._turnstile_is_pending():
+                break
+            print("检测到登录窗口中的 Cloudflare Turnstile 仍在验证。")
+            print("请不要关闭浏览器；可在浏览器中刷新登录窗口或切换网络后重试。")
+
+    def _turnstile_is_pending(self) -> bool:
+        if self._page is None:
+            return False
+        try:
+            widget = self._page.locator(
+                'iframe[src*="challenges.cloudflare.com"], .cf-turnstile'
+            )
+            if widget.count() == 0:
+                return False
+
+            responses = self._page.locator(
+                'input[name="cf-turnstile-response"]'
+            )
+            for index in range(responses.count()):
+                value = responses.nth(index).input_value(timeout=2000).strip()
+                if value:
+                    return False
+            return True
+        except PlaywrightError as exc:
+            logging.warning("无法读取 Turnstile 状态，将继续等待人工确认：%s", exc)
+            return True
 
     def lookup(self, number: str) -> FetchResult:
         try:

@@ -7,7 +7,7 @@
   "request_timeout": 20,
   "actress_map_csv": "actress_map.csv",
   "lookup_mode": "browser",
-  "browser_profile_dir": "browser_profile",
+  "browser_profile_dir": "browser_profile_v2",
   "browser_headless": false,
   "browser_wait_seconds": 60,
   "save_browser_results_to_csv": true

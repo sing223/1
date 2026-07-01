@@ -38,6 +38,46 @@ class MainHelpersTest(unittest.TestCase):
         randint.assert_called_once_with(5, 20)
         sleep.assert_called_once_with(13)
 
+    @patch("main.launch_persistent_context")
+    def test_browser_launch_uses_real_headed_viewport(self, launch):
+        context = Mock()
+        context.pages = [Mock()]
+        launch.return_value = context
+        browser_lookup = object.__new__(main.BrowserLookup)
+        browser_lookup.config = Mock(
+            browser_profile_dir=Path("browser_profile_v2"),
+            browser_headless=False,
+        )
+        browser_lookup._context = None
+        browser_lookup._page = None
+
+        browser_lookup._ensure_started()
+
+        _, kwargs = launch.call_args
+        self.assertFalse(kwargs["headless"])
+        self.assertTrue(kwargs["humanize"])
+        self.assertNotIn("viewport", kwargs)
+        self.assertNotIn("locale", kwargs)
+
+    def test_turnstile_pending_until_response_token_exists(self):
+        browser_lookup = object.__new__(main.BrowserLookup)
+        page = Mock()
+        browser_lookup._page = page
+        widget = Mock()
+        widget.count.return_value = 1
+        responses = Mock()
+        responses.count.return_value = 1
+        response = Mock()
+        responses.nth.return_value = response
+        page.locator.side_effect = [widget, responses]
+
+        response.input_value.return_value = ""
+        self.assertTrue(browser_lookup._turnstile_is_pending())
+
+        page.locator.side_effect = [widget, responses]
+        response.input_value.return_value = "verified-token"
+        self.assertFalse(browser_lookup._turnstile_is_pending())
+
     def test_parse_first_actress_from_actress_link(self):
         html = '<a href="/actresses/123">女优A</a><a href="/actresses/456">女优B</a>'
         self.assertEqual(main.parse_first_actress(html), "女优A")

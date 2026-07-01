@@ -5,6 +5,7 @@ organized_dirs.json
 actress_map.csv
 logs/
 browser_profile/
+browser_profile_v2/
 __pycache__/
 tmp*/
 *.pyc
