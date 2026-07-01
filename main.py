@@ -3,9 +3,12 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 import random
 import re
 import shutil
+import socket
+import subprocess
 import sys
 import time
 import webbrowser
@@ -24,9 +27,11 @@ except ImportError:  # pragma: no cover - shown to users in the console.
 try:
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.sync_api import sync_playwright
 except ImportError:  # pragma: no cover - shown to users in the console.
     PlaywrightError = Exception
     PlaywrightTimeoutError = TimeoutError
+    sync_playwright = None
 
 try:
     from cloakbrowser import launch_persistent_context
@@ -66,6 +71,8 @@ class Config:
     browser_headless: bool
     browser_wait_seconds: int
     save_browser_results_to_csv: bool
+    browser_backend: str = "chrome_cdp"
+    chrome_executable: Optional[Path] = None
 
 
 @dataclass
@@ -110,6 +117,11 @@ def load_config() -> Config:
     browser_profile_dir = Path(raw.get("browser_profile_dir", "browser_profile")).expanduser()
     if not browser_profile_dir.is_absolute():
         browser_profile_dir = SCRIPT_DIR / browser_profile_dir
+    browser_backend = str(raw.get("browser_backend", "chrome_cdp")).strip().lower()
+    if browser_backend not in {"chrome_cdp", "cloak"}:
+        raise ValueError("browser_backend 只能是 chrome_cdp 或 cloak")
+    chrome_executable_raw = str(raw.get("chrome_executable", "")).strip()
+    chrome_executable = Path(chrome_executable_raw).expanduser() if chrome_executable_raw else None
 
     lookup_mode = str(raw.get("lookup_mode", "")).strip().lower()
     if not lookup_mode:
@@ -131,6 +143,8 @@ def load_config() -> Config:
         browser_headless=bool(raw.get("browser_headless", False)),
         browser_wait_seconds=int(raw.get("browser_wait_seconds", 60)),
         save_browser_results_to_csv=bool(raw.get("save_browser_results_to_csv", True)),
+        browser_backend=browser_backend,
+        chrome_executable=chrome_executable,
     )
 
 
@@ -244,6 +258,39 @@ def wait_before_browser_lookup() -> int:
     logging.info("下一个视频检索前随机等待 %s 秒", seconds)
     time.sleep(seconds)
     return seconds
+
+
+def find_chrome_executable(configured: Optional[Path] = None) -> Path:
+    candidates = []
+    if configured:
+        candidates.append(configured)
+    for environment_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        root = os.environ.get(environment_name)
+        if root:
+            candidates.append(Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise FileNotFoundError(
+        "找不到 Google Chrome，请安装 Chrome 或在 config.json 设置 chrome_executable"
+    )
+
+
+def reserve_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def build_chrome_cdp_command(executable: Path, profile: Path, port: int) -> List[str]:
+    return [
+        str(executable),
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={profile}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        TARGET_BASE_URL,
+    ]
 
 
 def path_is_inside(child: Path, parent: Path) -> bool:
@@ -433,13 +480,20 @@ def manual_lookup(number: str) -> FetchResult:
 
 class BrowserLookup:
     def __init__(self, config: Config):
-        if launch_persistent_context is None:
+        if config.browser_backend == "cloak" and launch_persistent_context is None:
             raise RuntimeError(
                 "缺少依赖 cloakbrowser，请先运行：pip install -r requirements.txt"
+            )
+        if config.browser_backend == "chrome_cdp" and sync_playwright is None:
+            raise RuntimeError(
+                "缺少依赖 playwright，请先运行：pip install -r requirements.txt"
             )
         self.config = config
         self._context = None
         self._page = None
+        self._playwright = None
+        self._browser = None
+        self._browser_process = None
 
     def __enter__(self) -> "BrowserLookup":
         return self
@@ -447,14 +501,73 @@ class BrowserLookup:
     def _ensure_started(self) -> None:
         if self._context is not None:
             return
-        self._context = launch_persistent_context(
-            str(self.config.browser_profile_dir),
-            headless=self.config.browser_headless,
-            humanize=True,
-        )
+        if self.config.browser_backend == "cloak":
+            self._context = launch_persistent_context(
+                str(self.config.browser_profile_dir),
+                headless=self.config.browser_headless,
+                humanize=True,
+            )
+        else:
+            self._start_system_chrome()
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
         self._page.on("requestfailed", self._log_turnstile_request_failure)
         self._page.on("console", self._log_turnstile_console_error)
+
+    def _start_system_chrome(self) -> None:
+        executable = find_chrome_executable(self.config.chrome_executable)
+        port = reserve_local_port()
+        command = build_chrome_cdp_command(
+            executable,
+            self.config.browser_profile_dir,
+            port,
+        )
+        creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        self._browser_process = subprocess.Popen(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags,
+        )
+        endpoint = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 20
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                response = requests.get(f"{endpoint}/json/version", timeout=1)
+                response.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                last_error = exc
+                time.sleep(0.25)
+        else:
+            self._stop_system_chrome()
+            raise RuntimeError(f"系统 Chrome 调试端口启动超时：{last_error}")
+
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.connect_over_cdp(endpoint)
+        if not self._browser.contexts:
+            self._stop_system_chrome()
+            raise RuntimeError("系统 Chrome 没有可用浏览器上下文")
+        self._context = self._browser.contexts[0]
+
+    def _stop_system_chrome(self) -> None:
+        if self._browser is not None:
+            try:
+                self._browser.close()
+            except PlaywrightError:
+                pass
+            self._browser = None
+        if self._playwright is not None:
+            self._playwright.stop()
+            self._playwright = None
+        if self._browser_process is not None:
+            if self._browser_process.poll() is None:
+                self._browser_process.terminate()
+                try:
+                    self._browser_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._browser_process.kill()
+            self._browser_process = None
 
     @staticmethod
     def _log_turnstile_request_failure(request) -> None:
@@ -472,8 +585,12 @@ class BrowserLookup:
         logging.warning("Turnstile 控制台信息：%s", text)
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        if self._context is not None:
+        if self.config.browser_backend == "chrome_cdp":
+            self._stop_system_chrome()
+        elif self._context is not None:
             self._context.close()
+        self._context = None
+        self._page = None
 
     def prepare_login(self) -> None:
         self._ensure_started()

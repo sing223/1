@@ -47,6 +47,7 @@ class MainHelpersTest(unittest.TestCase):
         browser_lookup.config = Mock(
             browser_profile_dir=Path("browser_profile_v2"),
             browser_headless=False,
+            browser_backend="cloak",
         )
         browser_lookup._context = None
         browser_lookup._page = None
@@ -58,6 +59,18 @@ class MainHelpersTest(unittest.TestCase):
         self.assertTrue(kwargs["humanize"])
         self.assertNotIn("viewport", kwargs)
         self.assertNotIn("locale", kwargs)
+
+    def test_build_chrome_cdp_command_uses_normal_chrome_flags(self):
+        executable = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+        profile = Path(r"C:\profiles\fc2")
+
+        command = main.build_chrome_cdp_command(executable, profile, 9333)
+
+        self.assertEqual(command[0], str(executable))
+        self.assertIn("--remote-debugging-port=9333", command)
+        self.assertIn(f"--user-data-dir={profile}", command)
+        self.assertIn(main.TARGET_BASE_URL, command)
+        self.assertNotIn("--enable-automation", command)
 
     def test_turnstile_pending_until_response_token_exists(self):
         browser_lookup = object.__new__(main.BrowserLookup)
