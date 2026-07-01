@@ -6,6 +6,8 @@ actress_map.csv
 logs/
 browser_profile/
 browser_profile_v2/
+browser_profile_v3/
+browser_diagnostic_profile/
 __pycache__/
 tmp*/
 *.pyc

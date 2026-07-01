@@ -63,20 +63,35 @@ class MainHelpersTest(unittest.TestCase):
         browser_lookup = object.__new__(main.BrowserLookup)
         page = Mock()
         browser_lookup._page = page
+        dialog = Mock()
+        dialog.count.return_value = 1
         widget = Mock()
         widget.count.return_value = 1
         responses = Mock()
         responses.count.return_value = 1
         response = Mock()
         responses.nth.return_value = response
-        page.locator.side_effect = [widget, responses]
+        page.locator.side_effect = [dialog, widget, responses]
 
         response.input_value.return_value = ""
-        self.assertTrue(browser_lookup._turnstile_is_pending())
+        self.assertEqual(browser_lookup._turnstile_state(), "pending")
 
-        page.locator.side_effect = [widget, responses]
+        page.locator.side_effect = [dialog, widget, responses]
         response.input_value.return_value = "verified-token"
-        self.assertFalse(browser_lookup._turnstile_is_pending())
+        self.assertEqual(browser_lookup._turnstile_state(), "solved")
+
+    def test_turnstile_missing_when_login_dialog_has_no_widget(self):
+        browser_lookup = object.__new__(main.BrowserLookup)
+        page = Mock()
+        browser_lookup._page = page
+        dialog = Mock()
+        dialog.count.return_value = 1
+        dialog.first.is_visible.return_value = True
+        widget = Mock()
+        widget.count.return_value = 0
+        page.locator.side_effect = [dialog, widget]
+
+        self.assertEqual(browser_lookup._turnstile_state(), "missing")
 
     def test_parse_first_actress_from_actress_link(self):
         html = '<a href="/actresses/123">女优A</a><a href="/actresses/456">女优B</a>'

@@ -453,6 +453,23 @@ class BrowserLookup:
             humanize=True,
         )
         self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
+        self._page.on("requestfailed", self._log_turnstile_request_failure)
+        self._page.on("console", self._log_turnstile_console_error)
+
+    @staticmethod
+    def _log_turnstile_request_failure(request) -> None:
+        url = getattr(request, "url", "")
+        if "challenges.cloudflare.com" not in url.lower():
+            return
+        failure = getattr(request, "failure", None)
+        logging.warning("Turnstile 网络请求失败：%s；%s", url, failure or "未知错误")
+
+    @staticmethod
+    def _log_turnstile_console_error(message) -> None:
+        text = getattr(message, "text", "")
+        if not any(word in text.lower() for word in ("turnstile", "cloudflare", "challenge")):
+            return
+        logging.warning("Turnstile 控制台信息：%s", text)
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if self._context is not None:
@@ -474,20 +491,32 @@ class BrowserLookup:
         print("请先在浏览器右上角完成登录，确认登录成功后再回到这里。")
         while True:
             input("登录完成后按回车开始自动抓取...")
-            if not self._turnstile_is_pending():
+            state = self._turnstile_state()
+            if state in {"absent", "solved"}:
                 break
+            if state == "missing":
+                print("登录窗口已打开，但 Cloudflare Turnstile 控件没有加载。")
+                print("脚本将刷新页面；请重新打开登录窗口并再次输入账号。")
+                self._page.reload(
+                    wait_until="domcontentloaded",
+                    timeout=self.config.browser_wait_seconds * 1000,
+                )
+                continue
             print("检测到登录窗口中的 Cloudflare Turnstile 仍在验证。")
-            print("请不要关闭浏览器；可在浏览器中刷新登录窗口或切换网络后重试。")
+            print("请不要关闭浏览器；等待验证完成或切换网络后重试。")
 
-    def _turnstile_is_pending(self) -> bool:
+    def _turnstile_state(self) -> str:
         if self._page is None:
-            return False
+            return "absent"
         try:
+            dialog = self._page.locator('div[role="dialog"]')
             widget = self._page.locator(
                 'iframe[src*="challenges.cloudflare.com"], .cf-turnstile'
             )
             if widget.count() == 0:
-                return False
+                if dialog.count() and dialog.first.is_visible():
+                    return "missing"
+                return "absent"
 
             responses = self._page.locator(
                 'input[name="cf-turnstile-response"]'
@@ -495,11 +524,14 @@ class BrowserLookup:
             for index in range(responses.count()):
                 value = responses.nth(index).input_value(timeout=2000).strip()
                 if value:
-                    return False
-            return True
+                    return "solved"
+            return "pending"
         except PlaywrightError as exc:
             logging.warning("无法读取 Turnstile 状态，将继续等待人工确认：%s", exc)
-            return True
+            return "pending"
+
+    def _turnstile_is_pending(self) -> bool:
+        return self._turnstile_state() in {"missing", "pending"}
 
     def lookup(self, number: str) -> FetchResult:
         try:
